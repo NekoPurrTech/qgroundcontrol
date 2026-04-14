@@ -70,6 +70,8 @@
 #include "VehicleComponent.h"
 #include "VideoManager.h"
 
+#include <QPointer>
+
 #ifndef QGC_DISABLE_MAVLINK_INSPECTOR
 #include "MAVLinkInspectorController.h"
 #endif

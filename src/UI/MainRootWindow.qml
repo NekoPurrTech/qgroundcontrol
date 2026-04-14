@@ -366,18 +366,19 @@ ApplicationWindow {
                         }
                         //Add engineButton
                         SubMenuButton{
-                        id:                 engineButton
-                        height:             toolSelectDialog._toolButtonHeight
-                        Layout.fillWidth:   true
-                        text:               qsTr("ECAM")
-                        imageResource:      "/qmlimages/EcamIcon.svg"
-                        visible:            QGroundControl.corePlugin.showAdvancedUI
-                        onClicked:{
-                            if(mainWindow.allowViewSwitch()){
-                                mainWindow.closeIndicatorDrawer()
-                                mainWindow.showEngineStatus()
+                            id:                 engineButton
+                            height:             toolSelectDialog._toolButtonHeight
+                            Layout.fillWidth:   true
+                            text:               qsTr("ECAM")
+                            imageResource:      "/qmlimages/EcamIcon.svg"
+                            visible:            QGroundControl.corePlugin.showAdvancedUI
+                            onClicked:{
+                                if(mainWindow.allowViewSwitch()){
+                                    mainWindow.closeIndicatorDrawer()
+                                    mainWindow.showEngineStatus()
+                                }
+                            }
                         }
-
                         SubMenuButton {
                             id:                 analyzeButton
                             height:             toolSelectDialog._toolButtonHeight
