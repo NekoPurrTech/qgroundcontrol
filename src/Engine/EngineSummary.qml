@@ -224,7 +224,7 @@ Item {
         BarGauge {
             id: rpmGauge
             label: "Engine\nRPM"
-            value: 2500
+            value: (typeof engineCtrl !== 'undefined' && engineCtrl.rpm !== 0) ? engineCtrl.rpm : 2500
             maxValue: 6000
             unit: "rpm"
             barColor: "#42A5F5"
@@ -233,7 +233,7 @@ Item {
         BarGauge {
             id: intakeGauge
             label: "Intake\nTemp"
-            value: 45
+            value: (typeof engineCtrl !== 'undefined' && engineCtrl.intakeTemp !== 0) ? engineCtrl.intakeTemp : 45
             maxValue: 100
             unit: "°C"
             barColor: "#FFA726"
@@ -242,7 +242,7 @@ Item {
         BarGauge {
             id: exhaustGauge
             label: "Exhaust\nTemp"
-            value: 720
+            value: (typeof engineCtrl !== 'undefined' && engineCtrl.exhaustTemp !== 0) ? engineCtrl.exhaustTemp : 720
             maxValue: 900
             unit: "°C"
             barColor: "#EF5350"
@@ -251,31 +251,11 @@ Item {
         BarGauge {
             id: oilGauge
             label: "Oil\nTemp"
-            value: 85
+            value: (typeof engineCtrl !== 'undefined' && engineCtrl.temperature !== 0) ? engineCtrl.temperature : 85
             maxValue: 120
             unit: "°C"
             barColor: "#66BB6A"
         }
     }
-
-    // 数据更新定时器
-    Timer {
-        interval: 800  // 每800毫秒更新一次
-        running: true
-        repeat: true
-
-        onTriggered: {
-            // Engine RPM: 1000-2800 之间波动（模拟引擎转速）
-            rpmGauge.value = 4000 + Math.random() * 1800
-
-            // Intake Temp: 30-80 度之间缓慢变化
-            intakeGauge.value = 30 + Math.random() * 50
-
-            // Exhaust Temp: 600-850 度之间变化（较高温度）
-            exhaustGauge.value = 600 + Math.random() * 250
-
-            // Oil Temp: 70-110 度之间变化
-            oilGauge.value = 70 + Math.random() * 40
-        }
-    }
+    // Values are bound to EngineStatusController when available; Timer simulation removed.
 }
