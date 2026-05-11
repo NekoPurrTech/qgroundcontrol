@@ -285,6 +285,16 @@ bool MAVLinkProtocol::_updateStatus(LinkInterface *link, const SharedLinkInterfa
         emit mavlinkMessageStatus(message.sysid, totalSent, _totalReceiveCounter[mavlinkChannel], _totalLossCounter[mavlinkChannel], _runningLossPercent[mavlinkChannel]);
     }
 
+    // Debug: print whether this message has MAVLink message_info available
+    const mavlink_message_info_t *mi = mavlink_get_message_info(&message);
+    qCDebug(MAVLinkProtocolLog) << "recv msgid=" << message.msgid << " sys=" << message.sysid << " comp=" << message.compid << " msgInfo=" << (mi ? mi->name : "(null)");
+
+    // Also print to stderr to ensure the debug message is visible when Qt logging is redirected
+    fprintf(stderr, "recv msgid=%u sys=%u comp=%u msgInfo=%s\n", static_cast<unsigned>(message.msgid), static_cast<unsigned>(message.sysid), static_cast<unsigned>(message.compid), (mi ? mi->name : "(null)"));
+
+    // Additionally print the full serialized MAVLink packet as hex so raw messages can be inspected
+   
+
     emit messageReceived(link, message);
 
     if (linkPtr.use_count() == 1) {

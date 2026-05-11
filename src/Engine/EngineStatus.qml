@@ -124,40 +124,6 @@ Rectangle {
 
         property string title
 
-        // Simple overlay display of a few engine values
-        Column {
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.topMargin: 400
-            anchors.rightMargin: 400
-            spacing: 6
-
-            Rectangle {
-                width: 220
-                height: 28
-                color: "transparent"
-                Text { anchors.centerIn: parent; text: "RPM: " + engineCtrl.rpm; color: qgcPal.text }
-            }
-            Rectangle {
-                width: 220
-                height: 28
-                color: "transparent"
-                Text { anchors.centerIn: parent; text: "Oil pressure: " + engineCtrl.oilPressure.toFixed(2) + " kPa"; color: qgcPal.text }
-            }
-            Rectangle {
-                width: 220
-                height: 28
-                color: "transparent"
-                Text { anchors.centerIn: parent; text: "Temp: " + engineCtrl.temperature.toFixed(2) + " C"; color: qgcPal.text }
-            }
-            Rectangle {
-                width: 220
-                height: 28
-                color: "transparent"
-                Text { anchors.centerIn: parent; text: "Voltage: " + engineCtrl.voltage.toFixed(2) + " V"; color: qgcPal.text }
-            }
-        }
-
         Connections {
             target:     panelLoader.item
             onPopout:   mainWindow.createrWindowedAnalyzePage(panelLoader.title, panelLoader.source)

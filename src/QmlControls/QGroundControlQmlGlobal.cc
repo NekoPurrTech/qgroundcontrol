@@ -41,6 +41,7 @@
 #include "TerrainProfile.h"
 #include "ToolStripAction.h"
 #include "ToolStripActionList.h"
+#include "../Engine/EngineCommandSender.h"
 #include "../Engine/Engine.h"
 #include "VideoManager.h"
 #include "MultiVehicleManager.h"
@@ -101,6 +102,7 @@ void QGroundControlQmlGlobal::registerQmlTypes()
     qmlRegisterType<RCToParamDialogController>          ("QGroundControl.Controllers",           1, 0, "RCToParamDialogController");
     qmlRegisterType<ScreenToolsController>              ("QGroundControl.Controllers",           1, 0, "ScreenToolsController");
     qmlRegisterType<EngineStatusController>             ("QGroundControl.Controllers",           1, 0, "EngineStatusController");
+    qmlRegisterType<EngineCommandSender>                ("QGroundControl.Controllers",           1, 0, "EngineCommandSender");
     qmlRegisterType<TerrainProfile>                     ("QGroundControl.Controls",              1, 0, "TerrainProfile");
     qmlRegisterType<ToolStripAction>                    ("QGroundControl.Controls",              1, 0, "ToolStripAction");
     qmlRegisterType<ToolStripActionList>                ("QGroundControl.Controls",              1, 0, "ToolStripActionList");

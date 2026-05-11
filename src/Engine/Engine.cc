@@ -1,3 +1,5 @@
+// EngineStatusController implementation
+
 #include "Engine.h"
 
 #include "MAVLinkProtocol.h"
@@ -5,264 +7,310 @@
 #include "LinkInterface.h"
 
 #include <QtCore/QDebug>
-
 #include "QGCLoggingCategory.h"
 
-QGC_LOGGING_CATEGORY(EngineLog, "qgc.engine")
-
-#include <QtCore/QByteArray>
-#include <algorithm>
+#include <QDir>
+#include <QtGlobal>
+#include <QDateTime>
+#include <QIODevice>
+#include <QTextStream>
+#include <cmath>
 #include <cstring>
 
 EngineStatusController::EngineStatusController(QObject *parent)
-	: QObject(parent)
+    : QObject(parent)
 {
-	// Subscribe to global MAVLink messages
-	if (MAVLinkProtocol::instance()) {
-		(void) connect(MAVLinkProtocol::instance(), &MAVLinkProtocol::messageReceived,
-					   this, &EngineStatusController::_receiveMessage);
-	}
+    // Connect to MAVLinkProtocol so we receive incoming MAVLink messages
+    MAVLinkProtocol *const mavlinkProtocol = MAVLinkProtocol::instance();
+    (void) connect(mavlinkProtocol, &MAVLinkProtocol::messageReceived, this, &EngineStatusController::_receiveMessage);
+
+    _engineDataLogTimer.setInterval(ENGINE_LOG_INTERVAL_MS);
+    _engineDataLogTimer.setSingleShot(false);
+    (void) connect(&_engineDataLogTimer, &QTimer::timeout, this, &EngineStatusController::_engineLogTimerTick);
 }
 
-void EngineStatusController::_receiveMessage(const LinkInterface* link, const mavlink_message_t &message)
+EngineStatusController::~EngineStatusController()
 {
-	Q_UNUSED(link);
-
-	// Try to identify engine-related messages by name from the mavlink metadata
-	const mavlink_message_info_t *msgInfo = mavlink_get_message_info(&message);
-	if (!msgInfo) {
-		qCDebug(EngineLog) << "EngineStatusController: NULL msgInfo for msgid" << message.msgid;
-		return;
-	}
-
-	// Pointer to raw payload bytes for direct offset reads
-	const uint8_t *msg = reinterpret_cast<const uint8_t*>(&message.payload64[0]);
-
-	const QString msgName = QString::fromLatin1(msgInfo->name).toLower();
-	qCDebug(EngineLog) << "EngineStatusController: received msgid" << message.msgid << "name" << msgName << "fields" << msgInfo->num_fields;
-	// Special-case: PX4 mavlink stream packs UAVCAN engine status into DEBUG_FLOAT_ARRAY
-	if (msgName == QStringLiteral("debug_float_array") || message.msgid == MAVLINK_MSG_ID_DEBUG_FLOAT_ARRAY) {
-		// Find the name field (char array) and the data float array offset
-		const unsigned int numFields = msgInfo->num_fields;
-		const char *embeddedName = nullptr;
-		unsigned int nameLen = 0;
-		unsigned int dataOffset = 0;
-		unsigned int dataCount = 0;
-		for (unsigned int i = 0; i < numFields; ++i) {
-			const auto &f = msgInfo->fields[i];
-			if (f.type == MAVLINK_TYPE_CHAR && f.array_length > 0) {
-				embeddedName = reinterpret_cast<const char*>(msg + f.wire_offset);
-				nameLen = f.array_length;
-			}
-			if ((f.type == MAVLINK_TYPE_FLOAT) && f.array_length > 0 && QString::fromLatin1(f.name) == QStringLiteral("data")) {
-				dataOffset = f.wire_offset;
-				dataCount = f.array_length;
-			}
-		}
-
-		QString eName;
-		if (embeddedName) {
-			eName = QString::fromLatin1(embeddedName, static_cast<int>(nameLen)).trimmed().toLower();
-			qCDebug(EngineLog) << "EngineStatusController: embedded name" << eName;
-		}
-
-		if (eName.contains("eng_ten") || eName.contains("eng_hun") || eName.contains("eng")) {
-			// Parse float array starting at dataOffset
-			if (dataCount == 0) {
-				qCDebug(EngineLog) << "EngineStatusController: debug_float_array has no data field info";
-			} else {
-				// Helper to read float at index
-				auto readFloatIndex = [&](unsigned int idx)->double {
-					if (idx >= dataCount) return 0.0;
-					float v = 0.0f;
-					(void) memcpy(&v, msg + dataOffset + idx * sizeof(float), sizeof(float));
-					return static_cast<double>(v);
-				};
-
-				if (eName.contains("eng_ten")) {
-					// Map based on uavcan_engine_status_ten mapping in sending code
-					double oilPressure = readFloatIndex(7); // oil_pressure_kpa
-					double oilTemp = readFloatIndex(8); // oil_temperature_c
-					double voltage_v = readFloatIndex(44); // voltage_v
-					double rpmVal = readFloatIndex(47); // rpm
-
-					// Additional fields
-					double intake = readFloatIndex(13); // ambient_temp
-					// exhaust: take max of cyl_exh_temp_1..4 indices 18-21
-					double ex1 = readFloatIndex(18);
-					double ex2 = readFloatIndex(19);
-					double ex3 = readFloatIndex(20);
-					double ex4 = readFloatIndex(21);
-					double exhaustMax = std::max(std::max(ex1, ex2), std::max(ex3, ex4));
-					double fuelPres = readFloatIndex(6); // fuel_pressure_kpa
-					double supplyV = readFloatIndex(16); // supply_voltage_a
-
-					if (!qFuzzyCompare(oilPressure + 1.0, _oilPressure + 1.0)) {
-						_oilPressure = oilPressure;
-						emit oilPressureChanged();
-					}
-					if (!qFuzzyCompare(oilTemp + 1.0, _temperature + 1.0)) {
-						_temperature = oilTemp;
-						emit temperatureChanged();
-					}
-					if (!qFuzzyCompare(voltage_v + 1.0, _voltage + 1.0)) {
-						_voltage = voltage_v;
-						emit voltageChanged();
-					}
-					if (!qFuzzyCompare(intake + 1.0, _intakeTemp + 1.0)) {
-						_intakeTemp = intake;
-						emit intakeTempChanged();
-					}
-					if (!qFuzzyCompare(exhaustMax + 1.0, _exhaustTemp + 1.0)) {
-						_exhaustTemp = exhaustMax;
-						emit exhaustTempChanged();
-					}
-					if (!qFuzzyCompare(fuelPres + 1.0, _fuelPressure + 1.0)) {
-						_fuelPressure = fuelPres;
-						emit fuelPressureChanged();
-					}
-					if (!qFuzzyCompare(supplyV + 1.0, _supplyVoltage + 1.0)) {
-						_supplyVoltage = supplyV;
-						emit supplyVoltageChanged();
-					}
-					if (_rpm != static_cast<int>(rpmVal)) {
-						_rpm = static_cast<int>(rpmVal);
-						emit rpmChanged();
-					}
-
-					qCDebug(EngineLog) << "EngineStatusController: ENG_TEN parsed rpm" << _rpm << "oilPressure" << _oilPressure << "temp" << _temperature << "voltage" << _voltage;
-				} else if (eName.contains("eng_hun")) {
-					// Map based on uavcan_engine_status_hun mapping
-					double rpmA = readFloatIndex(8); // engine_speed_a_rpm
-					double rpmB = readFloatIndex(9); // engine_speed_b_rpm
-					double rpmVal = rpmA != 0.0 ? rpmA : rpmB;
-					double oilTemp = readFloatIndex(4); // cyl_coolant_temp_1_c as proxy
-					double intake = readFloatIndex(0); // manifold_temp_a_c
-					double supplyV = 0.0; // ENG_HUN does not include voltage in this mapping
-
-					if (_rpm != static_cast<int>(rpmVal)) {
-						_rpm = static_cast<int>(rpmVal);
-						emit rpmChanged();
-					}
-					if (!qFuzzyCompare(oilTemp + 1.0, _temperature + 1.0)) {
-						_temperature = oilTemp;
-						emit temperatureChanged();
-					}
-					if (!qFuzzyCompare(intake + 1.0, _intakeTemp + 1.0)) {
-						_intakeTemp = intake;
-						emit intakeTempChanged();
-					}
-
-					qCDebug(EngineLog) << "EngineStatusController: ENG_HUN parsed rpm" << _rpm << "temp" << _temperature;
-				}
-			}
-		}
-		return;
-	}
-
-	if (!msgName.contains("engine") && !msgName.contains("uavcan")) {
-		// not an engine/uavcan message - but do a payload scan for a fallback to detect uavcan text
-		// not an engine/uavcan message - but do a payload scan for a fallback to detect uavcan text
-		const uint8_t *raw = reinterpret_cast<const uint8_t*>(&(message.payload64[0]));
-		const char *needle = "uavcan";
-		const size_t needleLen = 6;
-		bool found = false;
-		for (unsigned int p = 0; p + needleLen <= MAVLINK_MAX_PAYLOAD_LEN; ++p) {
-			bool match = true;
-			for (size_t k = 0; k < needleLen; ++k) {
-				if (raw[p + k] != static_cast<uint8_t>(needle[k])) { match = false; break; }
-			}
-			if (match) { found = true; qCDebug(EngineLog) << "EngineStatusController: payload contains 'uavcan' at offset" << p; break; }
-		}
-	if (found) {
-			// Dump a short hex preview to help identify message layout
-			QByteArray hexPreview;
-			const unsigned int dumpLen = std::min<unsigned int>(32, MAVLINK_MAX_PAYLOAD_LEN);
-			for (unsigned int i = 0; i < dumpLen; ++i) {
-				char buf[4];
-				qsnprintf(buf, sizeof(buf), "%02X", raw[i]);
-				hexPreview.append(buf);
-				if (i < dumpLen - 1) hexPreview.append(' ');
-			}
-			qCDebug(EngineLog) << "EngineStatusController: msgid" << message.msgid << "hexPreview:" << hexPreview;
-		}
-		return;
-	}
-
-	// Look for common field names and extract basic numeric values
-
-	for (unsigned int i = 0; i < msgInfo->num_fields; ++i) {
-		const char *fieldName = msgInfo->fields[i].name;
-		const QString field = QString::fromLatin1(fieldName).toLower();
-		const unsigned int offset = msgInfo->fields[i].wire_offset;
-		const unsigned int array_length = msgInfo->fields[i].array_length;
-
-		Q_UNUSED(array_length);
-
-		switch (msgInfo->fields[i].type) {
-		case MAVLINK_TYPE_INT32_T: {
-			int32_t v = 0;
-			(void) memcpy(&v, msg + offset, sizeof(v));
-			qCDebug(EngineLog) << " field" << fieldName << "INT32" << v << "offset" << offset;
-			if (field == "rpm") {
-				if (_rpm != static_cast<int>(v)) {
-					_rpm = static_cast<int>(v);
-					emit rpmChanged();
-				}
-			}
-			break;
-		}
-		case MAVLINK_TYPE_UINT32_T: {
-			uint32_t v = 0;
-			(void) memcpy(&v, msg + offset, sizeof(v));
-			qCDebug(EngineLog) << " field" << fieldName << "UINT32" << v << "offset" << offset;
-			if (field == "rpm") {
-				if (_rpm != static_cast<int>(v)) {
-					_rpm = static_cast<int>(v);
-					emit rpmChanged();
-				}
-			}
-			break;
-		}
-		case MAVLINK_TYPE_INT16_T: {
-			int16_t v = 0;
-			(void) memcpy(&v, msg + offset, sizeof(v));
-			qCDebug(EngineLog) << " field" << fieldName << "INT16" << v << "offset" << offset;
-			if (field.contains("temp") || field.contains("temperature") || field.contains("oil_temp")) {
-				double dv = static_cast<double>(v);
-				if (!qFuzzyCompare(dv + 1.0, _temperature + 1.0)) {
-					_temperature = dv;
-					emit temperatureChanged();
-				}
-			}
-			break;
-		}
-		case MAVLINK_TYPE_FLOAT: {
-			float fv = 0.0f;
-			(void) memcpy(&fv, msg + offset, sizeof(fv));
-			qCDebug(EngineLog) << " field" << fieldName << "FLOAT" << fv << "offset" << offset;
-			double dv = static_cast<double>(fv);
-			if (field.contains("oil_pressure") || field.contains("pressure")) {
-				if (!qFuzzyCompare(dv + 1.0, _oilPressure + 1.0)) {
-					_oilPressure = dv;
-					emit oilPressureChanged();
-				}
-			} else if (field.contains("temp") || field.contains("temperature")) {
-				if (!qFuzzyCompare(dv + 1.0, _temperature + 1.0)) {
-					_temperature = dv;
-					emit temperatureChanged();
-				}
-			} else if (field.contains("voltage") || field.contains("supply_voltage") || field.contains("volt")) {
-				if (!qFuzzyCompare(dv + 1.0, _voltage + 1.0)) {
-					_voltage = dv;
-					emit voltageChanged();
-				}
-			}
-			break;
-		}
-		default:
-			break;
-		}
-	}
+    _stopEngineDataLog();
 }
 
+static qint64 nowMs()
+{
+    return QDateTime::currentMSecsSinceEpoch();
+}
+
+bool EngineStatusController::hasField(const QString &key) const
+{
+    return _lastFieldUpdateTime.contains(key) && _lastFieldUpdateTime.value(key) > 0;
+}
+
+QString EngineStatusController::_engineDataLogDirectory() const
+{
+    return QStringLiteral("E:/QGC/qgroundcontrol_lab/engine_data");
+}
+
+QString EngineStatusController::_uniqueEngineDataLogFilePath(qint64 timestampMs) const
+{
+    const QDir dir(_engineDataLogDirectory());
+    const QString baseName = QStringLiteral("EngineSummary_%1")
+        .arg(QDateTime::fromMSecsSinceEpoch(timestampMs).toString(QStringLiteral("yyyy-MM-dd_hh-mm-ss")));
+
+    QString fileName = baseName + QStringLiteral(".csv");
+    int duplicateIndex = 1;
+    while (dir.exists(fileName)) {
+        fileName = QStringLiteral("%1.%2.csv").arg(baseName).arg(duplicateIndex++);
+    }
+
+    return dir.absoluteFilePath(fileName);
+}
+
+static QString csvDouble(double value)
+{
+    return QString::number(value, 'f', 3);
+}
+
+void EngineStatusController::_startEngineDataLog(qint64 timestampMs)
+{
+    if (_engineDataLogFile.isOpen()) {
+        if (!_engineDataLogTimer.isActive()) {
+            _engineDataLogTimer.start();
+        }
+        return;
+    }
+
+    const QString logDirPath = _engineDataLogDirectory();
+    QDir logDir(logDirPath);
+    if (!logDir.exists() && !QDir().mkpath(logDirPath)) {
+        qWarning() << "Unable to create engine data log directory:" << logDirPath;
+        return;
+    }
+
+    _engineDataLogFile.setFileName(_uniqueEngineDataLogFilePath(timestampMs));
+    if (!_engineDataLogFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "Unable to open engine data log file:" << _engineDataLogFile.fileName() << _engineDataLogFile.errorString();
+        return;
+    }
+
+    QTextStream out(&_engineDataLogFile);
+    out << "timestamp_iso,timestamp_ms,data_class,last_message_type,last_array_id,"
+        << "hun_msg_count,ten_msg_count,"
+        << "speed_rpm,"
+        << "throttle_opening_pct,throttle_position_pct,"
+        << "electrical_voltage_v,"
+        << "temperature_oil_c,temperature_intake_c,"
+        << "temperature_exhaust_1_c,temperature_exhaust_2_c,temperature_exhaust_3_c,temperature_exhaust_4_c,"
+        << "temperature_coolant_1_c,temperature_coolant_2_c,temperature_coolant_3_c,temperature_coolant_4_c,"
+        << "pressure_oil_bar,pressure_manifold_hpa,pressure_fuel_bar\n";
+    (void) _engineDataLogFile.flush();
+    _engineDataLogTimer.start();
+}
+
+void EngineStatusController::_stopEngineDataLog()
+{
+    if (_engineDataLogTimer.isActive()) {
+        _engineDataLogTimer.stop();
+    }
+
+    if (_engineDataLogFile.isOpen()) {
+        (void) _engineDataLogFile.flush();
+        _engineDataLogFile.close();
+    }
+}
+
+void EngineStatusController::_noteEngineDataReceived(const QString &messageType, int arrayId, qint64 timestampMs)
+{
+    _lastEngineDataTimeMs = timestampMs;
+    _lastEngineMessageType = messageType;
+    _lastEngineArrayId = arrayId;
+    _startEngineDataLog(timestampMs);
+}
+
+void EngineStatusController::_writeEngineDataLogRow(qint64 timestampMs)
+{
+    if (!_engineDataLogFile.isOpen()) {
+        return;
+    }
+
+    QTextStream out(&_engineDataLogFile);
+    out << QDateTime::fromMSecsSinceEpoch(timestampMs).toString(Qt::ISODateWithMs) << ','
+        << timestampMs << ','
+        << "engine_summary_1hz" << ','
+        << _lastEngineMessageType << ','
+        << _lastEngineArrayId << ','
+        << _hunMsgCount << ','
+        << _tenMsgCount << ','
+        << csvDouble(_rpm) << ','
+        << csvDouble(_throttleOpeningSendVal) << ','
+        << csvDouble(_throttlePosA) << ','
+        << csvDouble(_voltage) << ','
+        << csvDouble(_temperature) << ','
+        << csvDouble(_intakeTemp) << ','
+        << csvDouble(_exhaustTemp1) << ','
+        << csvDouble(_exhaustTemp2) << ','
+        << csvDouble(_exhaustTemp3) << ','
+        << csvDouble(_exhaustTemp4) << ','
+        << csvDouble(_coolantTemp1) << ','
+        << csvDouble(_coolantTemp2) << ','
+        << csvDouble(_coolantTemp3) << ','
+        << csvDouble(_coolantTemp4) << ','
+        << csvDouble(_oilPressure) << ','
+        << csvDouble(_manifoldPreA) << ','
+        << csvDouble(_fuelPressure) << '\n';
+    (void) _engineDataLogFile.flush();
+}
+
+void EngineStatusController::_engineLogTimerTick()
+{
+    const qint64 timestampMs = nowMs();
+    if ((_lastEngineDataTimeMs == 0) || ((timestampMs - _lastEngineDataTimeMs) > ENGINE_DATA_STOP_TIMEOUT_MS)) {
+        _stopEngineDataLog();
+        return;
+    }
+
+    _writeEngineDataLogRow(timestampMs);
+}
+
+
+
+static float safeRead(const mavlink_debug_float_array_t &m, int idx)
+{
+    // mavlink DEBUG_FLOAT_ARRAY has data up to 56 entries
+    if (idx < 0 || idx >= (int)MAVLINK_MSG_DEBUG_FLOAT_ARRAY_FIELD_DATA_LEN) {
+        return 0.0f;
+    }
+    return m.data[idx];
+}
+
+// Member helpers to update fields with hysteresis and signal emission
+void EngineStatusController::_updateIntField(const QString &key, int &field, int newVal, void (EngineStatusController::*signal)())
+{
+    if (field == newVal) return;
+
+    qint64 t = nowMs();
+    field = newVal;
+    _lastFieldUpdateTime.insert(key, t);
+    if (newVal != 0) {
+        _lastFieldNonZeroTime.insert(key, t);
+    }
+    _lastFieldValue.insert(key, (double)newVal);
+    QMetaObject::invokeMethod(this, [this, signal]() { (this->*signal)(); }, Qt::QueuedConnection);
+}
+
+void EngineStatusController::_updateDoubleField(const QString &key, double &field, double newVal, void (EngineStatusController::*signal)())
+{
+    // float precision check to prevent continuous UI updates
+    if (std::abs(field - newVal) < 0.001) return;
+
+    qint64 t = nowMs();
+    field = newVal;
+    _lastFieldUpdateTime.insert(key, t);
+    if (newVal != 0.0) {
+        _lastFieldNonZeroTime.insert(key, t);
+    }
+    _lastFieldValue.insert(key, newVal);
+    QMetaObject::invokeMethod(this, [this, signal]() { (this->*signal)(); }, Qt::QueuedConnection);
+}
+
+void EngineStatusController:: _receiveMessage(const LinkInterface* /*link*/, const mavlink_message_t &message)
+{
+    if (message.msgid != MAVLINK_MSG_ID_DEBUG_FLOAT_ARRAY) {
+        return;
+    }
+
+    mavlink_debug_float_array_t dbg{};
+    mavlink_msg_debug_float_array_decode(&message, &dbg);
+
+    // message name may be shorter; compare with prefix
+    const char *name = dbg.name;
+    int array_id = dbg.array_id;
+    qint64 t = nowMs();
+
+    // compare names
+    if (strncmp(name, "eng_hun", sizeof(dbg.name)) == 0) {
+        _noteEngineDataReceived(QStringLiteral("eng_hun"), array_id, t);
+
+        // record HUN receive time for this source
+        _lastHunReceiveTime.insert(array_id, t);
+        // diagnostic counter
+        _hunMsgCount++;
+        QMetaObject::invokeMethod(this, [this]() { emit hunMsgCountChanged(); }, Qt::QueuedConnection);
+
+        // parse according to UAVCAN_ENGINE_STATUS(1).hpp mapping
+    // data[2] = manifold_temp_a_c -> intakeTemp
+    _updateDoubleField("intakeTemp", _intakeTemp, (double)safeRead(dbg, 2), &EngineStatusController::intakeTempChanged);
+    // data[4] = manifold_pre_a_kpa -> manifoldPreA
+    _updateDoubleField("manifoldPreA", _manifoldPreA, (double)safeRead(dbg, 4), &EngineStatusController::manifoldPreAChanged);
+
+        // cyl coolant temps 6..9 -> coolantTemp1..4
+        _updateDoubleField("coolantTemp1", _coolantTemp1, (double)safeRead(dbg, 6), &EngineStatusController::coolantTemp1Changed);
+        _updateDoubleField("coolantTemp2", _coolantTemp2, (double)safeRead(dbg, 7), &EngineStatusController::coolantTemp2Changed);
+        _updateDoubleField("coolantTemp3", _coolantTemp3, (double)safeRead(dbg, 8), &EngineStatusController::coolantTemp3Changed);
+        _updateDoubleField("coolantTemp4", _coolantTemp4, (double)safeRead(dbg, 9), &EngineStatusController::coolantTemp4Changed);
+
+        // engine speeds
+        double rpmA = (double)safeRead(dbg, 10);
+        double rpmB = (double)safeRead(dbg, 11);
+        // prefer A over B
+        if (rpmA != 0.0) {
+            // rpm hysteresis: update if change exceeds threshold or previously zero
+            if (std::abs(_rpm - rpmA) >= EngineStatusController::RPM_UPDATE_THRESHOLD || _rpm == 0.0) {
+                _updateDoubleField("rpm", _rpm, rpmA, &EngineStatusController::rpmChanged);
+            } else {
+                _lastFieldUpdateTime.insert("rpm", t);
+            }
+        } else if (rpmB != 0.0) {
+            if (std::abs(_rpm - rpmB) >= EngineStatusController::RPM_UPDATE_THRESHOLD || _rpm == 0.0) {
+                _updateDoubleField("rpm", _rpm, rpmB, &EngineStatusController::rpmChanged);
+            } else {
+                _lastFieldUpdateTime.insert("rpm", t);
+            }
+        }
+
+        // throttle pos sens a/b
+    _updateDoubleField("throttlePosA", _throttlePosA, (double)safeRead(dbg, 12), &EngineStatusController::throttlePosAChanged);
+
+        return;
+    }
+
+    // TEN messages
+    if (strncmp(name, "eng_ten", sizeof(dbg.name)) == 0) {
+        _noteEngineDataReceived(QStringLiteral("eng_ten"), array_id, t);
+
+        _lastTenReceiveTime.insert(array_id, t);
+        // diagnostic counter
+        _tenMsgCount++;
+        QMetaObject::invokeMethod(this, [this]() { emit tenMsgCountChanged(); }, Qt::QueuedConnection);
+
+        // If we have a recent HUN for this source, prefer HUN and skip updating fields that HUN covers.
+        qint64 lastHun = _lastHunReceiveTime.value(array_id, 0);
+        bool hunRecent = (lastHun != 0) && ((t - lastHun) < HUN_PREFERRED_MS);
+
+        _updateDoubleField("fuelPressure", _fuelPressure, (double)safeRead(dbg, 8), &EngineStatusController::fuelPressureChanged);
+        _updateDoubleField("oilPressure", _oilPressure, (double)safeRead(dbg, 9), &EngineStatusController::oilPressureChanged);
+        _updateDoubleField("temperature", _temperature, (double)safeRead(dbg, 10), &EngineStatusController::temperatureChanged);
+        _updateDoubleField("throttleOpeningSendVal", _throttleOpeningSendVal, (double)safeRead(dbg, 14), &EngineStatusController::throttleOpeningSendValChanged);
+
+        double tenVoltage = (double)safeRead(dbg, 18);
+        _updateDoubleField("voltage", _voltage, tenVoltage, &EngineStatusController::voltageChanged);
+
+        _updateDoubleField("exhaustTemp1", _exhaustTemp1, (double)safeRead(dbg, 20), &EngineStatusController::exhaustTemp1Changed);
+        _updateDoubleField("exhaustTemp2", _exhaustTemp2, (double)safeRead(dbg, 21), &EngineStatusController::exhaustTemp2Changed);
+        _updateDoubleField("exhaustTemp3", _exhaustTemp3, (double)safeRead(dbg, 22), &EngineStatusController::exhaustTemp3Changed);
+        _updateDoubleField("exhaustTemp4", _exhaustTemp4, (double)safeRead(dbg, 23), &EngineStatusController::exhaustTemp4Changed);
+
+        // TEN rpm at data[49] - only use if we don't have a recent HUN for this source
+        if (!hunRecent) {
+            double tenRpm = (double)safeRead(dbg, 49);
+            if (tenRpm != 0.0) {
+                if (std::abs(_rpm - tenRpm) >= EngineStatusController::RPM_UPDATE_THRESHOLD || _rpm == 0.0) {
+                    _updateDoubleField("rpm", _rpm, tenRpm, &EngineStatusController::rpmChanged);
+                } else {
+                    _lastFieldUpdateTime.insert("rpm", t);
+                }
+            }
+        } else {
+            // If HUN is recent, still refresh the rpm timestamp so hasField remains recent
+            _lastFieldUpdateTime.insert("rpm", t);
+        }
+    }
+}

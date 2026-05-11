@@ -2,9 +2,20 @@ import QtQuick
 import QtQuick.Shapes
 import QtQuick.Layouts
 
+import QGroundControl.Controllers 1.0
+
 Item {
     id: root
     anchors.fill: parent
+
+    EngineStatusController {
+        id: engineCtrl
+    }
+
+    // QML-accessible command sender (forward to active Vehicle)
+    EngineCommandSender {
+        id: engSender
+    }
 
     component ToggleSwitchBlue: Rectangle {
         id: toggleBlue
@@ -133,7 +144,7 @@ Item {
 
             Text {
                 width: parent.width
-                text: gauge.value.toFixed(0)
+                text: gauge.value.toFixed(1)
                 color: "white"
                 font.bold: true
                 font.pixelSize: 14
@@ -205,56 +216,208 @@ Item {
         anchors.margins: 20
         spacing: 20
 
-        ToggleSwitchAmber { text: "Fuel Pump 1" }
-        ToggleSwitchAmber { text: "Fuel Pump 2"}
-        ToggleSwitchBlue { text: "Water Cooler Fan 1"}
-        ToggleSwitchBlue { text: "Water Cooler Fan 2" }
-        ToggleSwitchBlue { text: "Inter Cooler Fan" }
-        ToggleSwitchGreen { text: "Engine Start" }
-        ToggleSwitchRed   { text: "Emergency STOP"}
+        ToggleSwitchAmber {
+            id: pump1
+            text: "Fuel Pump 1"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchAmber {
+            id: pump2
+            text: "Fuel Pump 2"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchBlue {
+            id: fan1
+            text: "Water Cooler Fan 1"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchBlue {
+            id: fan2
+            text: "Water Cooler Fan 2"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchBlue {
+            id: intercooler
+            text: "Inter Cooler Fan"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchGreen {
+            id: engStart
+            text: "Engine Start"
+            // onCheckedChanged handled by central keepalive timer
+        }
+
+        ToggleSwitchRed {
+            id: estop
+            text: "Emergency STOP"
+            // onCheckedChanged handled by central keepalive timer
+        }
     }
 
-    // 右侧横向仪表布局
-    Row {
+    // Central keepalive timer: periodically refresh active actuator channels so ActuatorTesting watchdog
+    // doesn't stop them. When any toggle is checked this timer runs and repeatedly sends setChannelTo.
+    property bool anyActuatorActive: pump1.checked || pump2.checked || fan1.checked || fan2.checked || intercooler.checked || engStart.checked || estop.checked
+
+    Timer {
+        id: actuatorKeepalive
+        interval: 80
+        repeat: true
+        running: anyActuatorActive
+        onTriggered: {
+            // Prefer globals.activeVehicle when available (matches Actuator UI). Fall back to 'vehicle' if present.
+            var v = null
+            if (typeof globals !== 'undefined' && globals.activeVehicle) {
+                v = globals.activeVehicle
+            } else if (typeof vehicle !== 'undefined') {
+                v = vehicle
+            }
+
+            if (!v || !v.actuators || !v.actuators.actuatorTest) {
+                return
+            }
+
+            var at = v.actuators.actuatorTest
+
+            // If any active, ensure actuator testing is active
+            if (anyActuatorActive) {
+                at.setActive(true)
+
+                // write each active channel repeatedly
+                if (pump1.checked) at.setChannelTo(0, 4000.0)
+                else at.stopControl(0)
+
+                if (pump2.checked) at.setChannelTo(1, 4000.0)
+                else at.stopControl(1)
+
+                if (fan1.checked) at.setChannelTo(2, 4000.0)
+                else at.stopControl(2)
+
+                if (fan2.checked) at.setChannelTo(3, 4000.0)
+                else at.stopControl(3)
+
+                if (intercooler.checked) at.setChannelTo(4, 4000.0)
+                else at.stopControl(4)
+
+                if (engStart.checked) at.setChannelTo(5, 4000.0)
+                else at.stopControl(5)
+
+                if (estop.checked) at.setChannelTo(6, 4000.0)
+                else at.stopControl(6)
+            } else {
+                // no active toggles, stop everything and deactivate
+                at.stopControl(-1)
+                at.setActive(false)
+            }
+        }
+    }
+
+    // 按照图表要求重构布局：分为3排，完全替换以前的右侧列和下方网格
+    Column {
+        id: mappedGrid
         anchors.top: parent.top
-        anchors.right: parent.right
+        anchors.horizontalCenter: parent.horizontalCenter
         anchors.margins: 20
-        spacing: 20
+        spacing: 30
 
-        BarGauge {
-            id: rpmGauge
-            label: "Engine\nRPM"
-            value: (typeof engineCtrl !== 'undefined' && engineCtrl.rpm !== 0) ? engineCtrl.rpm : 2500
-            maxValue: 6000
-            unit: "rpm"
-            barColor: "#42A5F5"
+        // 第1排：序号 1, 7, 8, 12
+        Row {
+            spacing: 20
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            BarGauge {
+                label: "发动机转速"
+                unit: "r/min"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.rpm : 0
+                maxValue: 6500
+            }
+            BarGauge {
+                label: "废气阀位置"
+                unit: "%"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.throttleOpeningSendVal : 0
+                maxValue: 100
+            }
+            BarGauge {
+                label: "节气门位置"
+                unit: "%"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.throttlePosA : 0
+                maxValue: 100
+            }
+            BarGauge {
+                label: "ECU电源电压"
+                unit: "V"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.voltage : 0
+                maxValue: 16
+            }
         }
 
-        BarGauge {
-            id: intakeGauge
-            label: "Intake\nTemp"
-            value: (typeof engineCtrl !== 'undefined' && engineCtrl.intakeTemp !== 0) ? engineCtrl.intakeTemp : 45
-            maxValue: 100
-            unit: "°C"
-            barColor: "#FFA726"
+        // 第2排：序号 2, 4(四个), 5(四个), 6
+        Row {
+            spacing: 20
+            anchors.horizontalCenter: parent.horizontalCenter
+
+            // (2) 滑油温度
+            BarGauge {
+                label: "滑油温度"
+                unit: "℃"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.temperature : 0
+                maxValue: 150
+            }
+
+            // (4) 排气温度 (四个)
+            BarGauge { label: "排气温度1"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.exhaustTemp1 : 0; maxValue: 1000 }
+            BarGauge { label: "排气温度2"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.exhaustTemp2 : 0; maxValue: 1000 }
+            BarGauge { label: "排气温度3"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.exhaustTemp3 : 0; maxValue: 1000 }
+            BarGauge { label: "排气温度4"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.exhaustTemp4 : 0; maxValue: 1000 }
+
+            // (5) 冷却液温度 (四个)
+            BarGauge { label: "冷却液温度1"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.coolantTemp1 : 0; maxValue: 150 }
+            BarGauge { label: "冷却液温度2"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.coolantTemp2 : 0; maxValue: 150 }
+            BarGauge { label: "冷却液温度3"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.coolantTemp3 : 0; maxValue: 150 }
+            BarGauge { label: "冷却液温度4"; unit: "℃"; value: (typeof engineCtrl !== 'undefined') ? engineCtrl.coolantTemp4 : 0; maxValue: 150 }
+
+            // (6) 歧管温度
+            BarGauge {
+                label: "歧管温度"
+                unit: "℃"
+                value: (typeof engineCtrl !== 'undefined') ? engineCtrl.intakeTemp : 0
+                maxValue: 100
+            }
         }
 
-        BarGauge {
-            id: exhaustGauge
-            label: "Exhaust\nTemp"
-            value: (typeof engineCtrl !== 'undefined' && engineCtrl.exhaustTemp !== 0) ? engineCtrl.exhaustTemp : 720
-            maxValue: 900
-            unit: "°C"
-            barColor: "#EF5350"
-        }
+        // 第3排：序号 3, 9, 10, 11
+        Row {
+            spacing: 20
+            anchors.horizontalCenter: parent.horizontalCenter
 
-        BarGauge {
-            id: oilGauge
-            label: "Oil\nTemp"
-            value: (typeof engineCtrl !== 'undefined' && engineCtrl.temperature !== 0) ? engineCtrl.temperature : 85
-            maxValue: 120
-            unit: "°C"
-            barColor: "#66BB6A"
+            BarGauge {
+                label: "滑油压力"
+                unit: "bar"
+                value: (typeof engineCtrl !== 'undefined') ? (engineCtrl.oilPressure ) : 0
+                maxValue: 8
+            }
+            BarGauge {
+                label: "歧管压力"
+                unit: "hPa"
+                value: (typeof engineCtrl !== 'undefined') ? (engineCtrl.manifoldPreA ) : 0
+                maxValue: 1500
+            }
+            BarGauge {
+                label: "燃油压力"
+                unit: "bar"
+                value: (typeof engineCtrl !== 'undefined') ? (engineCtrl.fuelPressure ) : 0
+                maxValue: 6
+            }
+            BarGauge {
+                label: "燃油压差"
+                unit: "bar"
+                value: 0  // 暂未找到直接对应的变量，先置0
+                maxValue: 5
+            }
         }
     }
     // Values are bound to EngineStatusController when available; Timer simulation removed.

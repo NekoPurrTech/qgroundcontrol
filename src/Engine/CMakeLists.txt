@@ -5,6 +5,8 @@ target_sources(${CMAKE_PROJECT_NAME}
     PRIVATE
         Engine.cc
         Engine.h
+        EngineCommandSender.cc
+        EngineCommandSender.h
 )
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
