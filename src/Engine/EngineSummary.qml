@@ -120,6 +120,36 @@ Item {
         }
     }
 
+    component CommandButton: Rectangle {
+        id: commandButton
+        width: 180
+        height: 38
+        radius: 6
+        color: selected ? "#4CAF50" : "#424242"
+        border.color: "#666"
+        border.width: 1
+
+        property string text: ""
+        property bool selected: false
+        signal clicked()
+
+        Text {
+            anchors.centerIn: parent
+            text: commandButton.text
+            color: "white"
+            font.bold: true
+            font.pixelSize: 12
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            wrapMode: Text.Wrap
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onClicked: commandButton.clicked()
+        }
+    }
+
 
     component BarGauge: Rectangle {
         id: gauge
@@ -210,6 +240,97 @@ Item {
     }
 
     // 左上角开关布局
+    property int selectedMode: -1
+    property bool hasThrottleRequest: false
+    property real throttleRequestValue: 0
+    property string throttleRequestText: ""
+    property bool hasRpmRequest: false
+    property real rpmRequestValue: 0
+    property string rpmRequestText: ""
+    property real escRawMaxValue: 8191.0
+
+    function escRawToActuatorValue(value) {
+        return (Number(value) - 1.0) / (escRawMaxValue - 1.0)
+    }
+
+    function actuatorTest() {
+        // Prefer globals.activeVehicle when available (matches Actuator UI). Fall back to 'vehicle' if present.
+        var v = null
+        if (typeof globals !== 'undefined' && globals.activeVehicle) {
+            v = globals.activeVehicle
+        } else if (typeof vehicle !== 'undefined') {
+            v = vehicle
+        }
+
+        if (!v || !v.actuators || !v.actuators.actuatorTest) {
+            return null
+        }
+
+        return v.actuators.actuatorTest
+    }
+
+    function sendEscChannel(channel, value) {
+        var at = actuatorTest()
+        if (!at) {
+            return false
+        }
+
+        at.setActive(true)
+        at.setChannelTo(channel, escRawToActuatorValue(value))
+        return true
+    }
+
+    function stopEscChannel(channel) {
+        var at = actuatorTest()
+        if (!at) {
+            return false
+        }
+
+        at.stopControl(channel)
+        return true
+    }
+
+    function pumpFanBitmask() {
+        var value = 0
+        if (pump1.checked) value |= 1
+        if (pump2.checked) value |= 2
+        if (fan1.checked) value |= 4
+        if (fan2.checked) value |= 8
+        if (intercooler.checked) value |= 16
+        return value
+    }
+
+    function sendPumpFanBitmask() {
+        return sendEscChannel(3, pumpFanBitmask())
+    }
+
+    function selectMode(modeValue) {
+        selectedMode = modeValue
+        return sendEscChannel(0, modeValue)
+    }
+
+    function confirmThrottleRequest() {
+        var value = Number(throttleRequestText)
+        if (isNaN(value)) {
+            return false
+        }
+
+        throttleRequestValue = value
+        hasThrottleRequest = true
+        return sendEscChannel(1, value)
+    }
+
+    function confirmRpmRequest() {
+        var value = Number(rpmRequestText)
+        if (isNaN(value)) {
+            return false
+        }
+
+        rpmRequestValue = value
+        hasRpmRequest = true
+        return sendEscChannel(2, value)
+    }
+
     Column {
         anchors.top: parent.top
         anchors.left: parent.left
@@ -219,49 +340,179 @@ Item {
         ToggleSwitchAmber {
             id: pump1
             text: "Fuel Pump 1"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: root.sendPumpFanBitmask()
         }
 
         ToggleSwitchAmber {
             id: pump2
             text: "Fuel Pump 2"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: root.sendPumpFanBitmask()
         }
 
         ToggleSwitchBlue {
             id: fan1
             text: "Water Cooler Fan 1"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: root.sendPumpFanBitmask()
         }
 
         ToggleSwitchBlue {
             id: fan2
             text: "Water Cooler Fan 2"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: root.sendPumpFanBitmask()
         }
 
         ToggleSwitchBlue {
             id: intercooler
             text: "Inter Cooler Fan"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: root.sendPumpFanBitmask()
         }
 
         ToggleSwitchGreen {
             id: engStart
             text: "Engine Start"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: checked ? root.sendEscChannel(5, 4000.0) : root.stopEscChannel(5)
         }
 
         ToggleSwitchRed {
             id: estop
             text: "Emergency STOP"
-            // onCheckedChanged handled by central keepalive timer
+            onCheckedChanged: checked ? root.sendEscChannel(6, 4000.0) : root.stopEscChannel(6)
+        }
+
+        Column {
+            width: 180
+            spacing: 8
+
+            Text {
+                width: parent.width
+                text: "Mode Select"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                CommandButton {
+                    width: 56
+                    height: 36
+                    text: "Mechanical"
+                    selected: root.selectedMode === 0
+                    onClicked: root.selectMode(0)
+                }
+
+                CommandButton {
+                    width: 56
+                    height: 36
+                    text: "Position"
+                    selected: root.selectedMode === 1
+                    onClicked: root.selectMode(1)
+                }
+
+                CommandButton {
+                    width: 56
+                    height: 36
+                    text: "Speed"
+                    selected: root.selectedMode === 2
+                    onClicked: root.selectMode(2)
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: "Throttle Request"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                Rectangle {
+                    width: 114
+                    height: 38
+                    radius: 4
+                    color: "#1a1a1a"
+                    border.color: "#666"
+                    border.width: 1
+
+                    TextInput {
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        text: root.throttleRequestText
+                        color: "white"
+                        font.pixelSize: 15
+                        verticalAlignment: TextInput.AlignVCenter
+                        selectByMouse: true
+                        validator: DoubleValidator {}
+                        onTextChanged: root.throttleRequestText = text
+                        onAccepted: root.confirmThrottleRequest()
+                    }
+                }
+
+                CommandButton {
+                    width: 60
+                    height: 38
+                    text: "Send"
+                    onClicked: root.confirmThrottleRequest()
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: "RPM Request"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 13
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Row {
+                width: parent.width
+                spacing: 6
+
+                Rectangle {
+                    width: 114
+                    height: 38
+                    radius: 4
+                    color: "#1a1a1a"
+                    border.color: "#666"
+                    border.width: 1
+
+                    TextInput {
+                        anchors.fill: parent
+                        anchors.margins: 6
+                        text: root.rpmRequestText
+                        color: "white"
+                        font.pixelSize: 15
+                        verticalAlignment: TextInput.AlignVCenter
+                        selectByMouse: true
+                        validator: DoubleValidator {}
+                        onTextChanged: root.rpmRequestText = text
+                        onAccepted: root.confirmRpmRequest()
+                    }
+                }
+
+                CommandButton {
+                    width: 60
+                    height: 38
+                    text: "Send"
+                    onClicked: root.confirmRpmRequest()
+                }
+            }
         }
     }
 
     // Central keepalive timer: periodically refresh active actuator channels so ActuatorTesting watchdog
     // doesn't stop them. When any toggle is checked this timer runs and repeatedly sends setChannelTo.
-    property bool anyActuatorActive: pump1.checked || pump2.checked || fan1.checked || fan2.checked || intercooler.checked || engStart.checked || estop.checked
+    property bool pumpFanControlsActive: pump1.checked || pump2.checked || fan1.checked || fan2.checked || intercooler.checked
+    property bool anyActuatorActive: pumpFanControlsActive || engStart.checked || estop.checked || selectedMode >= 0 || hasThrottleRequest || hasRpmRequest
 
     Timer {
         id: actuatorKeepalive
@@ -269,46 +520,23 @@ Item {
         repeat: true
         running: anyActuatorActive
         onTriggered: {
-            // Prefer globals.activeVehicle when available (matches Actuator UI). Fall back to 'vehicle' if present.
-            var v = null
-            if (typeof globals !== 'undefined' && globals.activeVehicle) {
-                v = globals.activeVehicle
-            } else if (typeof vehicle !== 'undefined') {
-                v = vehicle
-            }
-
-            if (!v || !v.actuators || !v.actuators.actuatorTest) {
-                return
-            }
-
-            var at = v.actuators.actuatorTest
+            var at = root.actuatorTest()
 
             // If any active, ensure actuator testing is active
-            if (anyActuatorActive) {
+            if (at && anyActuatorActive) {
                 at.setActive(true)
 
-                // write each active channel repeatedly
-                if (pump1.checked) at.setChannelTo(0, 4000.0)
-                else at.stopControl(0)
+                if (selectedMode >= 0) at.setChannelTo(0, escRawToActuatorValue(selectedMode))
+                if (hasThrottleRequest) at.setChannelTo(1, escRawToActuatorValue(throttleRequestValue))
+                if (hasRpmRequest) at.setChannelTo(2, escRawToActuatorValue(rpmRequestValue))
+                if (pumpFanControlsActive) at.setChannelTo(3, escRawToActuatorValue(pumpFanBitmask()))
 
-                if (pump2.checked) at.setChannelTo(1, 4000.0)
-                else at.stopControl(1)
-
-                if (fan1.checked) at.setChannelTo(2, 4000.0)
-                else at.stopControl(2)
-
-                if (fan2.checked) at.setChannelTo(3, 4000.0)
-                else at.stopControl(3)
-
-                if (intercooler.checked) at.setChannelTo(4, 4000.0)
-                else at.stopControl(4)
-
-                if (engStart.checked) at.setChannelTo(5, 4000.0)
+                if (engStart.checked) at.setChannelTo(5, escRawToActuatorValue(4000.0))
                 else at.stopControl(5)
 
-                if (estop.checked) at.setChannelTo(6, 4000.0)
+                if (estop.checked) at.setChannelTo(6, escRawToActuatorValue(4000.0))
                 else at.stopControl(6)
-            } else {
+            } else if (at) {
                 // no active toggles, stop everything and deactivate
                 at.stopControl(-1)
                 at.setActive(false)
