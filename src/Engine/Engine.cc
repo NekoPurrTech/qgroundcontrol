@@ -27,6 +27,11 @@ EngineStatusController::EngineStatusController(QObject *parent)
     _engineDataLogTimer.setInterval(ENGINE_LOG_INTERVAL_MS);
     _engineDataLogTimer.setSingleShot(false);
     (void) connect(&_engineDataLogTimer, &QTimer::timeout, this, &EngineStatusController::_engineLogTimerTick);
+
+    _engineConnectionStatusTimer.setInterval(100);
+    _engineConnectionStatusTimer.setSingleShot(false);
+    (void) connect(&_engineConnectionStatusTimer, &QTimer::timeout, this, &EngineStatusController::_engineConnectionStatusTimerTick);
+    _engineConnectionStatusTimer.start();
 }
 
 EngineStatusController::~EngineStatusController()
@@ -122,6 +127,10 @@ void EngineStatusController::_noteEngineDataReceived(const QString &messageType,
     _lastEngineDataTimeMs = timestampMs;
     _lastEngineMessageType = messageType;
     _lastEngineArrayId = arrayId;
+    if (!_engineDataConnected) {
+        _engineDataConnected = true;
+        QMetaObject::invokeMethod(this, [this]() { emit engineDataConnectedChanged(); }, Qt::QueuedConnection);
+    }
     _startEngineDataLog(timestampMs);
 }
 
@@ -168,6 +177,16 @@ void EngineStatusController::_engineLogTimerTick()
     }
 
     _writeEngineDataLogRow(timestampMs);
+}
+
+void EngineStatusController::_engineConnectionStatusTimerTick()
+{
+    const qint64 timestampMs = nowMs();
+    const bool connected = (_lastEngineDataTimeMs != 0) && ((timestampMs - _lastEngineDataTimeMs) <= ENGINE_DATA_CONNECTION_TIMEOUT_MS);
+    if (_engineDataConnected != connected) {
+        _engineDataConnected = connected;
+        QMetaObject::invokeMethod(this, [this]() { emit engineDataConnectedChanged(); }, Qt::QueuedConnection);
+    }
 }
 
 
@@ -269,6 +288,9 @@ void EngineStatusController:: _receiveMessage(const LinkInterface* /*link*/, con
         // throttle pos sens a/b
     _updateDoubleField("throttlePosA", _throttlePosA, (double)safeRead(dbg, 12), &EngineStatusController::throttlePosAChanged);
 
+        // data[16] = engine mode feedback
+        _updateIntField("engineMode", _engineMode, static_cast<int>(safeRead(dbg, 16)), &EngineStatusController::engineModeChanged);
+
         return;
     }
 
@@ -293,10 +315,15 @@ void EngineStatusController:: _receiveMessage(const LinkInterface* /*link*/, con
         double tenVoltage = (double)safeRead(dbg, 18);
         _updateDoubleField("voltage", _voltage, tenVoltage, &EngineStatusController::voltageChanged);
 
+        _updateDoubleField("throttleRequestFeedback", _throttleRequestFeedback, (double)safeRead(dbg, 29), &EngineStatusController::throttleRequestFeedbackChanged);
+        _updateDoubleField("rpmRequestFeedback", _rpmRequestFeedback, (double)safeRead(dbg, 31), &EngineStatusController::rpmRequestFeedbackChanged);
+
         _updateDoubleField("exhaustTemp1", _exhaustTemp1, (double)safeRead(dbg, 20), &EngineStatusController::exhaustTemp1Changed);
         _updateDoubleField("exhaustTemp2", _exhaustTemp2, (double)safeRead(dbg, 21), &EngineStatusController::exhaustTemp2Changed);
         _updateDoubleField("exhaustTemp3", _exhaustTemp3, (double)safeRead(dbg, 22), &EngineStatusController::exhaustTemp3Changed);
         _updateDoubleField("exhaustTemp4", _exhaustTemp4, (double)safeRead(dbg, 23), &EngineStatusController::exhaustTemp4Changed);
+
+        _updateIntField("fanStatusBits", _fanStatusBits, static_cast<int>(safeRead(dbg, 45)), &EngineStatusController::fanStatusBitsChanged);
 
         // TEN rpm at data[49] - only use if we don't have a recent HUN for this source
         if (!hunRecent) {

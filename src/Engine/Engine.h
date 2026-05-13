@@ -34,6 +34,11 @@ class EngineStatusController : public QObject
 	Q_PROPERTY(double throttleOpeningSendVal READ throttleOpeningSendVal NOTIFY throttleOpeningSendValChanged)
 	Q_PROPERTY(int hunMsgCount READ hunMsgCount NOTIFY hunMsgCountChanged)
 	Q_PROPERTY(int tenMsgCount READ tenMsgCount NOTIFY tenMsgCountChanged)
+	Q_PROPERTY(bool engineDataConnected READ engineDataConnected NOTIFY engineDataConnectedChanged)
+	Q_PROPERTY(int engineMode READ engineMode NOTIFY engineModeChanged)
+	Q_PROPERTY(double throttleRequestFeedback READ throttleRequestFeedback NOTIFY throttleRequestFeedbackChanged)
+	Q_PROPERTY(double rpmRequestFeedback READ rpmRequestFeedback NOTIFY rpmRequestFeedbackChanged)
+	Q_PROPERTY(int fanStatusBits READ fanStatusBits NOTIFY fanStatusBitsChanged)
 
 public:
 	explicit EngineStatusController(QObject *parent = nullptr);
@@ -59,12 +64,18 @@ public:
 	double manifoldPreA() const { return _manifoldPreA; }
 	double throttlePosA() const { return _throttlePosA; }
 	double throttleOpeningSendVal() const { return _throttleOpeningSendVal; }
+	bool engineDataConnected() const { return _engineDataConnected; }
+	int engineMode() const { return _engineMode; }
+	double throttleRequestFeedback() const { return _throttleRequestFeedback; }
+	double rpmRequestFeedback() const { return _rpmRequestFeedback; }
+	int fanStatusBits() const { return _fanStatusBits; }
 
 public slots:
 	void _receiveMessage(const LinkInterface* link, const mavlink_message_t &message);
 
 private slots:
 	void _engineLogTimerTick();
+	void _engineConnectionStatusTimerTick();
 
 public:
 	int hunMsgCount() const { return _hunMsgCount; }
@@ -91,6 +102,11 @@ signals:
 
 	void hunMsgCountChanged();
 	void tenMsgCountChanged();
+	void engineDataConnectedChanged();
+	void engineModeChanged();
+	void throttleRequestFeedbackChanged();
+	void rpmRequestFeedbackChanged();
+	void fanStatusBitsChanged();
 
 private:
 	double _rpm = 0.0;
@@ -112,6 +128,10 @@ private:
 	double _throttlePosA = 0.0;
 	// additional HUN tail fields
 	double _throttleOpeningSendVal = 0.0;
+	int _engineMode = 0;
+	double _throttleRequestFeedback = 0.0;
+	double _rpmRequestFeedback = 0.0;
+	int _fanStatusBits = 0;
 	// Track last-received timestamps per array_id (source) so we can prefer HUN data
 	// and only use TEN when HUN hasn't been received recently.
 	QMap<int, qint64> _lastHunReceiveTime;
@@ -142,9 +162,12 @@ private:
 
     QFile _engineDataLogFile;
     QTimer _engineDataLogTimer;
+    QTimer _engineConnectionStatusTimer;
     qint64 _lastEngineDataTimeMs = 0;
     QString _lastEngineMessageType;
     int _lastEngineArrayId = -1;
+    bool _engineDataConnected = false;
     static const int ENGINE_LOG_INTERVAL_MS = 1000;
     static const qint64 ENGINE_DATA_STOP_TIMEOUT_MS = 2500;
+    static const qint64 ENGINE_DATA_CONNECTION_TIMEOUT_MS = 5000;
 };

@@ -150,6 +150,42 @@ Item {
         }
     }
 
+    component FeedbackValue: Rectangle {
+        id: feedbackValue
+        width: 50
+        height: 38
+        radius: 4
+        color: "#1a1a1a"
+        border.color: "#666"
+        border.width: 1
+
+        property string valueText: "0"
+
+        Text {
+            anchors.centerIn: parent
+            width: parent.width - 8
+            text: feedbackValue.valueText
+            color: "white"
+            font.bold: true
+            font.pixelSize: 13
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            elide: Text.ElideRight
+        }
+    }
+
+    component FanStatusLight: Rectangle {
+        id: fanStatusLight
+        width: 20
+        height: 20
+        radius: 3
+        color: active ? "#4CAF50" : "#424242"
+        border.color: active ? "white" : "#666"
+        border.width: 1
+
+        property bool active: false
+    }
+
 
     component BarGauge: Rectangle {
         id: gauge
@@ -300,6 +336,30 @@ Item {
         return value
     }
 
+    function fanStatusOn(bitIndex) {
+        var bits = Number(engineCtrl.fanStatusBits)
+        if (isNaN(bits)) {
+            return false
+        }
+        return ((bits >> bitIndex) & 1) === 1
+    }
+
+    function numberText(value, decimals) {
+        var numberValue = Number(value)
+        if (isNaN(numberValue)) {
+            numberValue = 0
+        }
+        return numberValue.toFixed(decimals)
+    }
+
+    function intText(value) {
+        var numberValue = Number(value)
+        if (isNaN(numberValue)) {
+            numberValue = 0
+        }
+        return Math.round(numberValue).toString()
+    }
+
     function sendPumpFanBitmask() {
         return sendEscChannel(3, pumpFanBitmask())
     }
@@ -334,37 +394,123 @@ Item {
     Column {
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.margins: 20
-        spacing: 20
+        anchors.margins: 0
+        spacing: 12
 
-        ToggleSwitchAmber {
-            id: pump1
-            text: "Fuel Pump 1"
-            onCheckedChanged: root.sendPumpFanBitmask()
+        Rectangle {
+            width: 180
+            height: 36
+            radius: 4
+            color: "#2a2a2a"
+            border.color: "#666"
+            border.width: 1
+
+            Row {
+                anchors.centerIn: parent
+                spacing: 8
+
+                Rectangle {
+                    width: 18
+                    height: 18
+                    radius: 3
+                    color: engineCtrl.engineDataConnected === true ? "#4CAF50" : "#f44336"
+                    border.color: "white"
+                    border.width: 1
+                }
+
+                Text {
+                    text: "Engine Link"
+                    color: "white"
+                    font.bold: true
+                    font.pixelSize: 13
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
         }
 
-        ToggleSwitchAmber {
-            id: pump2
-            text: "Fuel Pump 2"
-            onCheckedChanged: root.sendPumpFanBitmask()
+        Row {
+            spacing: 8
+            ToggleSwitchAmber {
+                id: pump1
+                text: "Fuel Pump 1"
+                onCheckedChanged: root.sendPumpFanBitmask()
+            }
+            Item {
+                width: 20
+                height: 60
+                FanStatusLight {
+                    anchors.centerIn: parent
+                    active: root.fanStatusOn(0)
+                }
+            }
         }
 
-        ToggleSwitchBlue {
-            id: fan1
-            text: "Water Cooler Fan 1"
-            onCheckedChanged: root.sendPumpFanBitmask()
+        Row {
+            spacing: 8
+            ToggleSwitchAmber {
+                id: pump2
+                text: "Fuel Pump 2"
+                onCheckedChanged: root.sendPumpFanBitmask()
+            }
+            Item {
+                width: 20
+                height: 60
+                FanStatusLight {
+                    anchors.centerIn: parent
+                    active: root.fanStatusOn(1)
+                }
+            }
         }
 
-        ToggleSwitchBlue {
-            id: fan2
-            text: "Water Cooler Fan 2"
-            onCheckedChanged: root.sendPumpFanBitmask()
+        Row {
+            spacing: 8
+            ToggleSwitchBlue {
+                id: fan1
+                text: "Water Cooler Fan 1"
+                onCheckedChanged: root.sendPumpFanBitmask()
+            }
+            Item {
+                width: 20
+                height: 60
+                FanStatusLight {
+                    anchors.centerIn: parent
+                    active: root.fanStatusOn(2)
+                }
+            }
         }
 
-        ToggleSwitchBlue {
-            id: intercooler
-            text: "Inter Cooler Fan"
-            onCheckedChanged: root.sendPumpFanBitmask()
+        Row {
+            spacing: 8
+            ToggleSwitchBlue {
+                id: fan2
+                text: "Water Cooler Fan 2"
+                onCheckedChanged: root.sendPumpFanBitmask()
+            }
+            Item {
+                width: 20
+                height: 60
+                FanStatusLight {
+                    anchors.centerIn: parent
+                    active: root.fanStatusOn(3)
+                }
+            }
+        }
+
+        Row {
+            spacing: 8
+            ToggleSwitchBlue {
+                id: intercooler
+                text: "Inter Cooler Fan"
+                onCheckedChanged: root.sendPumpFanBitmask()
+            }
+            Item {
+                width: 20
+                height: 60
+                FanStatusLight {
+                    anchors.centerIn: parent
+                    active: root.fanStatusOn(4)
+                }
+            }
         }
 
         ToggleSwitchGreen {
@@ -380,7 +526,7 @@ Item {
         }
 
         Column {
-            width: 180
+            width: 236
             spacing: 8
 
             Text {
@@ -418,6 +564,12 @@ Item {
                     text: "Speed"
                     selected: root.selectedMode === 2
                     onClicked: root.selectMode(2)
+                }
+
+                FeedbackValue {
+                    width: 50
+                    height: 36
+                    valueText: root.intText(engineCtrl.engineMode)
                 }
             }
 
@@ -462,6 +614,10 @@ Item {
                     text: "Send"
                     onClicked: root.confirmThrottleRequest()
                 }
+
+                FeedbackValue {
+                    valueText: root.numberText(engineCtrl.throttleRequestFeedback, 1)
+                }
             }
 
             Text {
@@ -504,6 +660,10 @@ Item {
                     height: 38
                     text: "Send"
                     onClicked: root.confirmRpmRequest()
+                }
+
+                FeedbackValue {
+                    valueText: root.numberText(engineCtrl.rpmRequestFeedback, 0)
                 }
             }
         }
