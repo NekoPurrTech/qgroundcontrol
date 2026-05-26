@@ -74,6 +74,55 @@ static QString csvDouble(double value)
     return QString::number(value, 'f', 3);
 }
 
+static int twoBitState(quint32 value, int shift)
+{
+    return static_cast<int>((value >> shift) & 0x03);
+}
+
+static QString faultStateText(int state)
+{
+    switch (state) {
+    case 1:
+        return QStringLiteral("短路");
+    case 2:
+        return QStringLiteral("断路");
+    default:
+        return QString();
+    }
+}
+
+void EngineStatusController::_updateFaultState(const QString &label, int state)
+{
+    state &= 0x03;
+    if (_engineFaultStates.value(label, 0) == state) {
+        return;
+    }
+
+    if (state == 0) {
+        _engineFaultStates.remove(label);
+    } else {
+        _engineFaultStates.insert(label, state);
+    }
+}
+
+void EngineStatusController::_rebuildEngineFaultMessages()
+{
+    QStringList messages;
+    for (auto it = _engineFaultStates.constBegin(); it != _engineFaultStates.constEnd(); ++it) {
+        const QString stateText = faultStateText(it.value());
+        if (!stateText.isEmpty()) {
+            messages.append(QStringLiteral("%1：%2").arg(it.key(), stateText));
+        }
+    }
+
+    if (messages == _engineFaultMessages) {
+        return;
+    }
+
+    _engineFaultMessages = messages;
+    QMetaObject::invokeMethod(this, [this]() { emit engineFaultsChanged(); }, Qt::QueuedConnection);
+}
+
 void EngineStatusController::_startEngineDataLog(qint64 timestampMs)
 {
     if (_engineDataLogFile.isOpen()) {
@@ -187,6 +236,11 @@ void EngineStatusController::_engineConnectionStatusTimerTick()
         _engineDataConnected = connected;
         QMetaObject::invokeMethod(this, [this]() { emit engineDataConnectedChanged(); }, Qt::QueuedConnection);
     }
+    if (!connected && !_engineFaultMessages.isEmpty()) {
+        _engineFaultStates.clear();
+        _engineFaultMessages.clear();
+        QMetaObject::invokeMethod(this, [this]() { emit engineFaultsChanged(); }, Qt::QueuedConnection);
+    }
 }
 
 
@@ -291,6 +345,55 @@ void EngineStatusController:: _receiveMessage(const LinkInterface* /*link*/, con
         // data[16] = engine mode feedback
         _updateIntField("engineMode", _engineMode, static_cast<int>(safeRead(dbg, 16)), &EngineStatusController::engineModeChanged);
 
+        const quint32 sensStateManifold = static_cast<quint32>(safeRead(dbg, 22)) & 0xff;
+        _updateFaultState(QStringLiteral("歧管压力传感器AECU"), twoBitState(sensStateManifold, 0));
+        _updateFaultState(QStringLiteral("歧管压力传感器BECU"), twoBitState(sensStateManifold, 2));
+        _updateFaultState(QStringLiteral("歧管温度传感器AECU"), twoBitState(sensStateManifold, 4));
+        _updateFaultState(QStringLiteral("歧管温度传感器BECU"), twoBitState(sensStateManifold, 6));
+
+        const quint32 sensStateCoolant = static_cast<quint32>(safeRead(dbg, 23)) & 0xff;
+        _updateFaultState(QStringLiteral("1缸冷却液温度传感器"), twoBitState(sensStateCoolant, 0));
+        _updateFaultState(QStringLiteral("2缸冷却液温度传感器"), twoBitState(sensStateCoolant, 2));
+        _updateFaultState(QStringLiteral("3缸冷却液温度传感器"), twoBitState(sensStateCoolant, 4));
+        _updateFaultState(QStringLiteral("4缸冷却液温度传感器"), twoBitState(sensStateCoolant, 6));
+
+        const quint32 sensStateThrottle = static_cast<quint32>(safeRead(dbg, 24)) & 0xff;
+        _updateFaultState(QStringLiteral("节气门A位置传感器"), twoBitState(sensStateThrottle, 0));
+        _updateFaultState(QStringLiteral("节气门电机"), twoBitState(sensStateThrottle, 2));
+        _updateFaultState(QStringLiteral("节气门B位置传感器"), twoBitState(sensStateThrottle, 4));
+
+        const quint32 sensStateCurvedKnock = static_cast<quint32>(safeRead(dbg, 25)) & 0xff;
+        _updateFaultState(QStringLiteral("曲位传感器A"), twoBitState(sensStateCurvedKnock, 0));
+        _updateFaultState(QStringLiteral("爆震传感器"), twoBitState(sensStateCurvedKnock, 2));
+        _updateFaultState(QStringLiteral("曲位传感器B"), twoBitState(sensStateCurvedKnock, 4));
+        _updateFaultState(QStringLiteral("爆震发生状态"), twoBitState(sensStateCurvedKnock, 6));
+
+        const quint32 sensStateInjA = static_cast<quint32>(safeRead(dbg, 26)) & 0xff;
+        _updateFaultState(QStringLiteral("喷油器A2"), twoBitState(sensStateInjA, 0));
+        _updateFaultState(QStringLiteral("喷油器A1"), twoBitState(sensStateInjA, 2));
+        _updateFaultState(QStringLiteral("喷油器A4"), twoBitState(sensStateInjA, 4));
+        _updateFaultState(QStringLiteral("喷油器A3"), twoBitState(sensStateInjA, 6));
+
+        const quint32 sensStateInjB = static_cast<quint32>(safeRead(dbg, 27)) & 0xff;
+        _updateFaultState(QStringLiteral("喷油器B2"), twoBitState(sensStateInjB, 0));
+        _updateFaultState(QStringLiteral("喷油器B1"), twoBitState(sensStateInjB, 2));
+        _updateFaultState(QStringLiteral("喷油器B4"), twoBitState(sensStateInjB, 4));
+        _updateFaultState(QStringLiteral("喷油器B3"), twoBitState(sensStateInjB, 6));
+
+        const quint32 sensStateIgnCoil = static_cast<quint32>(safeRead(dbg, 28)) & 0xff;
+        _updateFaultState(QStringLiteral("点火线圈A34"), twoBitState(sensStateIgnCoil, 0));
+        _updateFaultState(QStringLiteral("点火线圈A12"), twoBitState(sensStateIgnCoil, 2));
+        _updateFaultState(QStringLiteral("点火线圈B34"), twoBitState(sensStateIgnCoil, 4));
+        _updateFaultState(QStringLiteral("点火线圈B12"), twoBitState(sensStateIgnCoil, 6));
+
+        const quint32 sensStatePwm = static_cast<quint32>(safeRead(dbg, 29)) & 0xff;
+        _updateFaultState(QStringLiteral("主喷油器组判定状态"), twoBitState(sensStatePwm, 0));
+        _updateFaultState(QStringLiteral("系统切换线PWM输出"), twoBitState(sensStatePwm, 2));
+        _updateFaultState(QStringLiteral("PWM信号线诊断状态ECUB"), twoBitState(sensStatePwm, 4));
+        _updateFaultState(QStringLiteral("PWM输出ECUB"), twoBitState(sensStatePwm, 6));
+
+        _rebuildEngineFaultMessages();
+
         return;
     }
 
@@ -324,6 +427,47 @@ void EngineStatusController:: _receiveMessage(const LinkInterface* /*link*/, con
         _updateDoubleField("exhaustTemp4", _exhaustTemp4, (double)safeRead(dbg, 23), &EngineStatusController::exhaustTemp4Changed);
 
         _updateIntField("fanStatusBits", _fanStatusBits, static_cast<int>(safeRead(dbg, 45)), &EngineStatusController::fanStatusBitsChanged);
+
+        const quint32 sensStateOxygen = static_cast<quint32>(safeRead(dbg, 39)) & 0xff;
+        _updateFaultState(QStringLiteral("氧传感器A"), twoBitState(sensStateOxygen, 0));
+        _updateFaultState(QStringLiteral("氧传感器B"), twoBitState(sensStateOxygen, 2));
+        _updateFaultState(QStringLiteral("滑油液位传感器"), twoBitState(sensStateOxygen, 4));
+
+        const quint32 sensStateCylExhTemp = static_cast<quint32>(safeRead(dbg, 40)) & 0xff;
+        _updateFaultState(QStringLiteral("1缸排温传感器"), twoBitState(sensStateCylExhTemp, 0));
+        _updateFaultState(QStringLiteral("2缸排温传感器"), twoBitState(sensStateCylExhTemp, 2));
+        _updateFaultState(QStringLiteral("3缸排温传感器"), twoBitState(sensStateCylExhTemp, 4));
+        _updateFaultState(QStringLiteral("4缸排温传感器"), twoBitState(sensStateCylExhTemp, 6));
+
+        const quint32 sensStateOilFuel = static_cast<quint32>(safeRead(dbg, 41)) & 0xff;
+        _updateFaultState(QStringLiteral("机油压力传感器"), twoBitState(sensStateOilFuel, 0));
+        _updateFaultState(QStringLiteral("燃油压力传感器"), twoBitState(sensStateOilFuel, 2));
+        _updateFaultState(QStringLiteral("机油温度传感器"), twoBitState(sensStateOilFuel, 4));
+
+        const quint32 sensStateBoostExh = static_cast<quint32>(safeRead(dbg, 42)) & 0xff;
+        _updateFaultState(QStringLiteral("增压压力传感器"), twoBitState(sensStateBoostExh, 0));
+        _updateFaultState(QStringLiteral("增压温度传感器"), twoBitState(sensStateBoostExh, 2));
+        _updateFaultState(QStringLiteral("废气阀电机位置传感器"), twoBitState(sensStateBoostExh, 4));
+        _updateFaultState(QStringLiteral("废气阀电机"), twoBitState(sensStateBoostExh, 6));
+
+        const quint32 sensStateAtmosphericTemp = static_cast<quint32>(safeRead(dbg, 43)) & 0xff;
+        _updateFaultState(QStringLiteral("A大气压力传感器"), twoBitState(sensStateAtmosphericTemp, 0));
+        _updateFaultState(QStringLiteral("B大气压力传感器"), twoBitState(sensStateAtmosphericTemp, 2));
+        _updateFaultState(QStringLiteral("环境温度传感器"), twoBitState(sensStateAtmosphericTemp, 4));
+
+        const quint32 msgStateCan = static_cast<quint32>(safeRead(dbg, 44)) & 0xff;
+        _updateFaultState(QStringLiteral("CAN通信1 ECUA"), twoBitState(msgStateCan, 0));
+        _updateFaultState(QStringLiteral("CAN通信2 ECUA"), twoBitState(msgStateCan, 2));
+        _updateFaultState(QStringLiteral("CAN通信1 ECUB"), twoBitState(msgStateCan, 4));
+        _updateFaultState(QStringLiteral("CAN通信2 ECUB"), twoBitState(msgStateCan, 6));
+
+        const quint32 msgVoltState422Volt = static_cast<quint32>(safeRead(dbg, 45)) & 0xff;
+        _updateFaultState(QStringLiteral("RS422通信 ECUA"), twoBitState(msgVoltState422Volt, 0));
+        _updateFaultState(QStringLiteral("电压 ECUA"), twoBitState(msgVoltState422Volt, 2));
+        _updateFaultState(QStringLiteral("RS422通信 ECUB"), twoBitState(msgVoltState422Volt, 4));
+        _updateFaultState(QStringLiteral("电压 ECUB"), twoBitState(msgVoltState422Volt, 6));
+
+        _rebuildEngineFaultMessages();
 
         // TEN rpm at data[49] - only use if we don't have a recent HUN for this source
         if (!hunRecent) {

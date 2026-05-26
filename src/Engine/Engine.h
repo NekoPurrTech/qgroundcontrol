@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QtCore/QFile>
+#include <QtCore/QStringList>
 #include <QtCore/QTimer>
 
 #include "MAVLinkLib.h"
@@ -39,6 +40,7 @@ class EngineStatusController : public QObject
 	Q_PROPERTY(double throttleRequestFeedback READ throttleRequestFeedback NOTIFY throttleRequestFeedbackChanged)
 	Q_PROPERTY(double rpmRequestFeedback READ rpmRequestFeedback NOTIFY rpmRequestFeedbackChanged)
 	Q_PROPERTY(int fanStatusBits READ fanStatusBits NOTIFY fanStatusBitsChanged)
+	Q_PROPERTY(QStringList engineFaults READ engineFaults NOTIFY engineFaultsChanged)
 
 public:
 	explicit EngineStatusController(QObject *parent = nullptr);
@@ -69,6 +71,7 @@ public:
 	double throttleRequestFeedback() const { return _throttleRequestFeedback; }
 	double rpmRequestFeedback() const { return _rpmRequestFeedback; }
 	int fanStatusBits() const { return _fanStatusBits; }
+	QStringList engineFaults() const { return _engineFaultMessages; }
 
 public slots:
 	void _receiveMessage(const LinkInterface* link, const mavlink_message_t &message);
@@ -107,6 +110,7 @@ signals:
 	void throttleRequestFeedbackChanged();
 	void rpmRequestFeedbackChanged();
 	void fanStatusBitsChanged();
+	void engineFaultsChanged();
 
 private:
 	double _rpm = 0.0;
@@ -132,6 +136,8 @@ private:
 	double _throttleRequestFeedback = 0.0;
 	double _rpmRequestFeedback = 0.0;
 	int _fanStatusBits = 0;
+	QStringList _engineFaultMessages;
+	QMap<QString, int> _engineFaultStates;
 	// Track last-received timestamps per array_id (source) so we can prefer HUN data
 	// and only use TEN when HUN hasn't been received recently.
 	QMap<int, qint64> _lastHunReceiveTime;
@@ -159,6 +165,8 @@ private:
     void _writeEngineDataLogRow(qint64 timestampMs);
     QString _engineDataLogDirectory() const;
     QString _uniqueEngineDataLogFilePath(qint64 timestampMs) const;
+    void _updateFaultState(const QString &label, int state);
+    void _rebuildEngineFaultMessages();
 
     QFile _engineDataLogFile;
     QTimer _engineDataLogTimer;
